@@ -22,6 +22,11 @@ python paxml/main.py \
 """
 # Internal import for aiding module import speed
 
+import tensorflow as tf
+tf.config.threading.set_intra_op_parallelism_threads(1)
+tf.config.threading.set_inter_op_parallelism_threads(1)
+tf.config.set_soft_device_placement(True)
+
 import contextlib
 import importlib
 import os
@@ -58,7 +63,6 @@ from praxis import py_utils
 # internal debugging module import
 # internal experiment module import
 # internal import for g3_multiprocessing
-
 
 FLAGS = flags.FLAGS
 
