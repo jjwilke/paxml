@@ -105,6 +105,9 @@ class GPT126M(TransformerLmSpmdAdam):
   FPROP_DTYPE = jnp.bfloat16
   MAX_STEPS = 600000
 
+  USE_ADAFACTOR = True
+  USE_SGD = False
+
   MAX_SEQ_LEN = 2048
   VOCAB_SIZE = 50304
   PACKED_INPUT = True
@@ -181,15 +184,20 @@ class Pile126M(GPT126M, PileUnsupervisedDataset):
     return task_p
 
 
+from paxml.tasks.lm.params.lm_cloud import SyntheticDataset
 @experiment_registry.register
-class Lambada126M(GPT126M, LambadaDataset):
+class Lambada126M(GPT126M, SyntheticDataset):
 
   ICI_MESH_SHAPE = [8,1,1]
+  MAX_STEPS = 100
+  EVAL_INTERVAL_STEPS = 10
 
   def task(self) -> pax_fiddle.Config[tasks_lib.SingleTask]:
     task_p = super().task()
     task_p.train.always_use_train_for_model_init=False
     task_p.model.report_strict_acc=True
+    task_p.train.num_train_steps = self.MAX_STEPS
+    task_p.train.eval_interval_steps = self.EVAL_INTERVAL_STEPS
     return task_p
 
 

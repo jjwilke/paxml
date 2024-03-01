@@ -22,6 +22,11 @@ python paxml/main.py \
 """
 # Internal import for aiding module import speed
 
+import tensorflow as tf
+tf.config.threading.set_intra_op_parallelism_threads(1)
+tf.config.threading.set_inter_op_parallelism_threads(1)
+tf.config.set_soft_device_placement(True)
+
 import contextlib
 import importlib
 import os
@@ -57,6 +62,8 @@ from praxis import py_utils
 # internal experiment module import
 # internal import for g3_multiprocessing
 
+
+from legate.jax import init as legate_init
 
 FLAGS = flags.FLAGS
 
@@ -283,6 +290,8 @@ def run_experiment(
       and decoding. If None, the training will train to requested steps.
     enable_checkpoint_saving: Whether to perform checkpoint saving or not.
   """
+  legate_init()
+
   train.write_experiment_class_vars_file(
       experiment_config.__class__, job_log_dir,
       '' if FLAGS.mode == 'train' else f'{FLAGS.mode}_')

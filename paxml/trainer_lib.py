@@ -19,7 +19,7 @@ import dataclasses
 import enum
 import functools
 import pprint
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol, Optional, Sequence
 
 from absl import logging
 import clu.metrics
@@ -89,6 +89,14 @@ PMAP_PARALLEL_AXIS_NAME = base_layer.PMAP_PARALLEL_AXIS_NAME
 
 instantiate = base_hyperparams.instantiate
 
+
+import gin
+import legate.jax
+
+@gin.configurable
+@dataclasses.dataclass
+class PaxLegateConfig(legate.jax.ClientConfig):
+  enable_tracing: bool = False
 
 class RunningMode(enum.Flag):
   """Running mode."""
@@ -920,6 +928,12 @@ class GradFnProtocol(Protocol):
       A tuple of (values, grads).
     """
 
+import gin
+
+@gin.configurable
+@dataclasses.dataclass
+class MicrobatchConfig:
+  size: Optional[int] = None
 
 def _get_default_grad_fn(
     excluded_for_grad: NestedMap, excluded_for_opt: NestedMap
@@ -942,10 +956,10 @@ def _get_default_grad_fn(
 
     def _loss(
         mdl_vars_grad: NestedJTensor,
-        mdl_vars_nograd_and_inputs: tuple[NestedJTensor, NestedMap],
+        mdl_vars_nograd: NestedJTensor,
+        inputs: NestedMap,
         prng_key: PRNGKey,
     ):
-      mdl_vars_nograd, inputs = mdl_vars_nograd_and_inputs
       merged_vars = jax.tree_map(
           lambda e, x, y: y if e else x,
           excluded_for_grad,
@@ -958,7 +972,12 @@ def _get_default_grad_fn(
       g = jax.value_and_grad(_loss, has_aux=True, allow_int=True)
     else:
       g = functools.partial(learner.stochastic_gradient.grad_fn, _loss)
-    values, grads = g(with_grad, (no_grad, inputs), prng_key)
+
+    microbatch_config = MicrobatchConfig()
+    if microbatch_config.size is not None:
+      from legate.jax import microbatch
+      g = microbatch(g, dim=0, argnum=2, size=microbatch_config.size)
+    values, grads = g(with_grad, no_grad, inputs, prng_key)
     grads = jax.tree_map(
         lambda eo, eg, m, g: jnp.zeros_like(m) if eg and not eo else g,
         excluded_for_opt,
@@ -1601,19 +1620,18 @@ def initialize_partitioned_model_states(
       lambda p: jax.sharding.NamedSharding(global_mesh, p),
       prng_key_partition_spec,
   )
-  train_state_shardings = jax.tree_map(
-      lambda p: jax.sharding.NamedSharding(global_mesh, p),
-      train_state_partition_specs,
-  )
+  train_state_shardings = train_state_partition_specs
 
-  init_fn = pjit.pjit(
-      init_model_from_seed,
-      in_shardings=prng_key_shardings,
-      out_shardings=train_state_shardings,
-  )
-  init_fn = bind_mesh(init_fn, global_mesh)
+  config = PaxLegateConfig()
+  with legate.jax.context(config):
+    init_fn = pjit.pjit(
+        init_model_from_seed,
+        in_shardings=prng_key_shardings,
+        out_shardings=train_state_shardings,
+    )
+    init_fn = bind_mesh(init_fn, global_mesh)
+    partitioned_vars = init_fn(prng_key)
 
-  partitioned_vars = init_fn(prng_key)
   train_state_provenance = train_states.build_train_state_provenance(
       partitioned_vars
   )

@@ -793,9 +793,9 @@ class SummaryHandler:
     Returns:
       True if the summaries were written, False otherwise.
     """
-    should_accumulate = self.should_accumulate(step)
-    should_write_summary = self.should_write(step)
-    should_log = self.should_log(step)
+    should_accumulate = False # self.should_accumulate(step)
+    should_write_summary = False # self.should_write(step)
+    should_log = False # self.should_log(step)
     if not (should_log or should_accumulate or should_write_summary):
       # Nothing to do, return immediately to avoid unnecessary work.
       return False

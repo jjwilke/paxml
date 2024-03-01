@@ -536,6 +536,7 @@ class TransformerLmSpmdAdafactor(base_experiment.BaseExperiment):
   USE_GATED_ACTIVATION = False
   DECAY_END = 100000
   USE_FP8 = False
+  REMAT = False
 
   # optimizer related
   DROPOUT_PROB = 0.0
@@ -622,6 +623,9 @@ class TransformerLmSpmdAdafactor(base_experiment.BaseExperiment):
     transformer_layer_p.tr_atten_tpl.use_bias = False
     transformer_layer_p.tr_atten_tpl.combine_qkv = self.COMBINE_QKV
 
+    stacked_transformer_tpl.checkpoint_policy = self.CHECKPOINT_POLICY
+    stacked_transformer_tpl.remat = self.REMAT
+
     if self.USE_FP8:
       transformer_layer_p.tr_atten_tpl.proj_tpl.einsum_tpl = pax_fiddle.Config(
           fp8_ops.Fp8EinsumOp
@@ -661,6 +665,7 @@ class TransformerLmSpmdAdafactor(base_experiment.BaseExperiment):
           self.CHECKPOINT_POLICY)
     else:
       model_p.lm_tpl.stacked_transformer_tpl = stacked_transformer_tpl
+      model_p.lm_tpl.stacked_transformer_tpl.checkpoint_policy = self.CHECKPOINT_POLICY
 
     # Enable bf16.
     model_p.fprop_dtype = self.FPROP_DTYPE
@@ -844,6 +849,7 @@ class TransformerLmSpmdPipelineAdafactor(TransformerLmSpmdAdafactor):
       stacked_transformer_tpl.x_times = self.NUM_LAYERS // (
           self.NUM_STAGES * self.CIRCULAR_REPEAT)
       stacked_transformer_tpl.checkpoint_policy = self.CHECKPOINT_POLICY
+      stacked_transformer_tpl.remat = self.REMAT
 
     # Wrap it with a pipeline layer.
     model_p.lm_tpl.stacked_transformer_tpl = pax_fiddle.Config(

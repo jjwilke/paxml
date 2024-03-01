@@ -139,6 +139,7 @@ class LambadaDataset(base_experiment.BaseExperiment):
 
   PERCORE_BATCH_SIZE: int = 1
   MAX_SEQ_LEN: int = 2048
+  LAMBADA_TRAIN: bool = False
 
   def _dataset_common(
       self, is_training
@@ -179,4 +180,4 @@ class LambadaDataset(base_experiment.BaseExperiment):
 
   def datasets(self) -> list[pax_fiddle.Config[base_input.BaseInput]]:
     """Returns a list of dataset parameters."""
-    return [self._dataset_common(is_training=False)]
+    return [self._dataset_common(is_training=self.LAMBADA_TRAIN)]

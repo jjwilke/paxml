@@ -386,13 +386,13 @@ def _train_and_evaluate_common(
   gc.freeze()
   while True:
     logging.log_first_n(INFO, '[PAX STATUS]: Beginning step `%d`.', 5, step_i)
-    checkpointer.save_if_needed(
-        step_i,
-        partitioned_train_state,
-        train_state_metadata.unpadded_global_shapes,
-        train_state_metadata.partition_specs,
-        train_input_for_checkpoint,
-    )
+    #checkpointer.save_if_needed(
+    #    step_i,
+    #    partitioned_train_state,
+    #    train_state_metadata.unpadded_global_shapes,
+    #    train_state_metadata.partition_specs,
+    #    train_input_for_checkpoint,
+    #)
     if exit_after_ondemand_checkpoint and checkpointer.reached_preemption(
         step_i
     ):
@@ -533,13 +533,12 @@ def _train_and_evaluate_common(
   gc.unfreeze()
 
   logging.info('[PAX STATUS]: Saving checkpoint for final step.')
-  checkpointer.save_final(
-      step_i,
-      partitioned_train_state=partitioned_train_state,
-      train_state_unpadded_shape_dtype_struct=train_state_metadata.unpadded_global_shapes,
-      train_state_pspecs=train_state_metadata.partition_specs,
-      train_input_pipeline=train_input_for_checkpoint,
-  )
-
-  checkpointer.wait_until_finished()
+  #checkpointer.save_final(
+  #    step_i,
+  #    partitioned_train_state=partitioned_train_state,
+  #    train_state_unpadded_shape_dtype_struct=train_state_metadata.unpadded_global_shapes,
+  #    train_state_pspecs=train_state_metadata.partition_specs,
+  #    train_input_pipeline=train_input_for_checkpoint,
+  #)
+  #checkpointer.wait_until_finished()
   logging.info('[PAX STATUS]: Final checkpoint saved.')
