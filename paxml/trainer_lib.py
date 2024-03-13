@@ -29,6 +29,7 @@ from flax import struct as flax_struct
 import jax
 from jax import numpy as jnp
 from jax.experimental import pjit
+from jax.sharding import PartitionSpec as P
 from paxml import base_metrics
 from paxml import checkpoint_types
 from paxml import learners as learners_lib
@@ -976,7 +977,18 @@ def _get_default_grad_fn(
     microbatch_config = MicrobatchConfig()
     if microbatch_config.size is not None:
       from legate.jax import microbatch
-      g = microbatch(g, dim=0, argnum=2, size=microbatch_config.size)
+      def microbatch_input_sharding(x):
+        if len(x.shape) == 2:
+          return P("replica", "seq")
+        return None
+      def microbatch_slice_sharding(x):
+        if len(x.shape) == 2:
+          return None
+        return P()
+      arg_shardings = jax.tree_map(microbatch_input_sharding, inputs)
+      slice_shardings = jax.tree_map(microbatch_slice_sharding, inputs)
+
+      g = microbatch(g, dim=0, argnum=2, size=microbatch_config.size, arg_shardings=arg_shardings, microbatch_shardings=slice_shardings)
     values, grads = g(with_grad, no_grad, inputs, prng_key)
     grads = jax.tree_map(
         lambda eo, eg, m, g: jnp.zeros_like(m) if eg and not eo else g,

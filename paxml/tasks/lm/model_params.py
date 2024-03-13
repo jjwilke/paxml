@@ -65,6 +65,7 @@ def set_sharding_annotations_v1(
   replica_axis = 'replica'
   data_axis = 'data'
   mdl_axis = 'mdl'
+  seq_axis = 'seq'
   mesh_axis_names = [replica_axis, data_axis, mdl_axis]
   task_p.train.inputs_split_mapping = NestedMap(
       map_1d=((replica_axis, data_axis),),
@@ -79,6 +80,7 @@ def set_sharding_annotations_v1(
         replica_axis=replica_axis,
         data_axis=data_axis,
         mdl_axis=mdl_axis,
+        seq_axis=seq_axis,
         ici_mesh_shape=model_p.ici_mesh_shape,
         dcn_mesh_shape=model_p.dcn_mesh_shape,
         mesh_axis_names=mesh_axis_names,

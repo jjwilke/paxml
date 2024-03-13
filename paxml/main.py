@@ -62,9 +62,6 @@ from praxis import py_utils
 # internal experiment module import
 # internal import for g3_multiprocessing
 
-
-from legate.jax import init as legate_init
-
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string(
@@ -290,8 +287,6 @@ def run_experiment(
       and decoding. If None, the training will train to requested steps.
     enable_checkpoint_saving: Whether to perform checkpoint saving or not.
   """
-  legate_init()
-
   train.write_experiment_class_vars_file(
       experiment_config.__class__, job_log_dir,
       '' if FLAGS.mode == 'train' else f'{FLAGS.mode}_')
