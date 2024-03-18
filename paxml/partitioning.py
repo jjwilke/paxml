@@ -743,7 +743,9 @@ class PmapPartitioner(Partitioner):
     ):
       if static_args:
         static_args = static_args.replace(unpadded_global_batch_size=None)
-      return partitioned_step_fn(state, prng_key, inputs, static_args)
+      config = trainer_lib.PaxLegateConfig()
+      with legate.jax.enable_tracing(config.enable_tracing):
+        return partitioned_step_fn(state, prng_key, inputs, static_args)
 
     return _wrapped_partitioned_step, None  # Input partition spec.
 
@@ -1183,7 +1185,17 @@ class PjitPartitioner(Partitioner):
         fn_out_partition_specs,
         use_pspec_on_array_inputs=use_pspec_on_array_inputs,
     )
-    return partitioned_step_fn
+    def _wrapped_partitioned_step(
+      state,
+      prng_key,
+      inputs,
+      static_args: BaseStepFnStaticArgs | None = None,
+    ):
+      config = trainer_lib.PaxLegateConfig()
+      with legate.jax.enable_tracing(config.enable_tracing):
+        return partitioned_step_fn(state, prng_key, inputs, static_args)
+
+    return _wrapped_partitioned_step
 
 
 class AutoShardingPjitPartitioner(PjitPartitioner):
