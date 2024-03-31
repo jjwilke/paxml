@@ -127,12 +127,18 @@ def compile_for_auto_sharding(
       train_state, step_key, inputs_shape_dtype, static_args
   ).compile()
 
+  sharding_str_arr = []
   def check(inp, inp_sharding, out):
+    sharding_str_arr.append(f"{inp.shape} {inp.sharding} {out}")
     if not inp_sharding.is_equivalent_to(out, len(inp.shape)):
-      print(inp.shape, inp_sharding, out)
-      raise Exception("mismatch")
+      raise Exception("\n".join(sharding_str_arr) + " mismatch")
 
   jax.tree_map(check, train_state, compiled.input_shardings[0][0], compiled.output_shardings[0])
+
+  import os
+  if os.getenv("PAXML_PRINT_SHARDINGS", False):
+    jax.tree_map(lambda x, x_sharding: print("Input sharding: ", x.shape, x_sharding), train_state, compiled.input_shardings[0][0])
+
   return compiled, compiled.input_shardings[0]
 
 
