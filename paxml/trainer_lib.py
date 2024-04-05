@@ -935,6 +935,7 @@ import gin
 @dataclasses.dataclass
 class MicrobatchConfig:
   size: Optional[int] = None
+  batch_reshape: Optional[int] = None
 
 def _get_default_grad_fn(
     excluded_for_grad: NestedMap, excluded_for_opt: NestedMap
@@ -988,7 +989,8 @@ def _get_default_grad_fn(
       arg_shardings = jax.tree_map(microbatch_input_sharding, inputs)
       slice_shardings = jax.tree_map(microbatch_slice_sharding, inputs)
 
-      g = microbatch(g, dim=0, argnum=2, size=microbatch_config.size, arg_shardings=arg_shardings, microbatch_shardings=slice_shardings)
+      g = microbatch(g, dim=0, argnum=2, batch_reshape=microbatch_config.batch_reshape, 
+                     size=microbatch_config.size, arg_shardings=arg_shardings, microbatch_shardings=slice_shardings)
     values, grads = g(with_grad, no_grad, inputs, prng_key)
     grads = jax.tree_map(
         lambda eo, eg, m, g: jnp.zeros_like(m) if eg and not eo else g,
@@ -1677,7 +1679,9 @@ def shard_on_batch_dim_partition_spec(
   sharding = [-1] * x_dim
   # Assume the first dim is batch, and fully shard the batch dim over the entire
   # mesh.
-  sharding[0] = tuple(mesh_names)
+  sharding[0] = tuple([x for x in mesh_names if x != "seq"])
+  if x_dim > 1:
+    sharding[1] = "seq"
   return base_layer.to_partition_spec(sharding, mesh_names)
 
 

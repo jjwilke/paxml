@@ -1031,7 +1031,7 @@ class PjitPartitioner(Partitioner):
       # need to keep this resharding, because the resharding is related to the
       # locations of the real data (inputs_split_mapping) and is not visible
       # from HLOs.
-      inputs = jax.tree_map(reshard_inputs_fn, inputs)
+      #inputs = jax.tree_map(reshard_inputs_fn, inputs)
 
       fn_out = step_fn(
           self._jax_task,
