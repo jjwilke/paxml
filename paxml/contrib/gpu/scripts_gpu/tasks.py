@@ -227,8 +227,8 @@ class BoolQDataset(base_experiment.BaseExperiment):
   EOS_ID: int = 2
 
   s = seqio.SentencePieceVocabulary(vocab_path)
-  TRUE_TOKEN: int = s.encode('yes')
-  FALSE_TOKEN: int = s.encode('no')
+  #TRUE_TOKEN: int = s.encode('yes')
+  #FALSE_TOKEN: int = s.encode('no')
 
   def _dataset_common(
       self, is_training
@@ -272,4 +272,4 @@ class BoolQDataset(base_experiment.BaseExperiment):
 
   def datasets(self) -> list[pax_fiddle.Config[base_input.BaseInput]]:
     """Returns a list of dataset parameters."""
-    return [self._dataset_common(is_training=False)]
+    return [self._dataset_common(is_training=self.LAMBADA_TRAIN)]

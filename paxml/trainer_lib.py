@@ -19,7 +19,7 @@ import dataclasses
 import enum
 import functools
 import pprint
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol, Optional, Sequence
 
 from absl import logging
 import clu.metrics
@@ -29,6 +29,7 @@ from flax import struct as flax_struct
 import jax
 from jax import numpy as jnp
 from jax.experimental import pjit
+from jax.sharding import PartitionSpec as P
 from paxml import base_metrics
 from paxml import checkpoint_types
 from paxml import learners as learners_lib
@@ -90,6 +91,14 @@ PMAP_PARALLEL_AXIS_NAME = base_layer.PMAP_PARALLEL_AXIS_NAME
 
 instantiate = base_hyperparams.instantiate
 
+
+import gin
+import legate.jax
+
+@gin.configurable
+@dataclasses.dataclass
+class PaxLegateConfig(legate.jax.ClientConfig):
+  local_mesh: Optional[tuple[int]] = None
 
 class RunningMode(enum.Flag):
   """Running mode."""
@@ -921,6 +930,15 @@ class GradFnProtocol(Protocol):
       A tuple of (values, grads).
     """
 
+import gin
+
+@gin.configurable
+@dataclasses.dataclass
+class MicrobatchConfig:
+  size: Optional[int] = None
+  schedule: Optional[str] = None
+  num_stages: Optional[int] = None
+  interleave: Optional[int] = None
 
 def _get_default_grad_fn(
     excluded_for_grad: NestedMap, excluded_for_opt: NestedMap
@@ -943,11 +961,11 @@ def _get_default_grad_fn(
 
     def _loss(
         mdl_vars_grad: NestedJTensor,
-        mdl_vars_nograd_and_inputs: tuple[NestedJTensor, NestedMap],
+        mdl_vars_nograd: NestedJTensor,
+        inputs: NestedMap,
         prng_key: PRNGKey,
     ):
-      mdl_vars_nograd, inputs = mdl_vars_nograd_and_inputs
-      merged_vars = jax.tree.map(
+      merged_vars = jax.tree_map(
           lambda e, x, y: y if e else x,
           excluded_for_grad,
           mdl_vars_grad,
@@ -959,8 +977,25 @@ def _get_default_grad_fn(
       g = jax.value_and_grad(_loss, has_aux=True, allow_int=True)
     else:
       g = functools.partial(learner.stochastic_gradient.grad_fn, _loss)
-    values, grads = g(with_grad, (no_grad, inputs), prng_key)
-    grads = jax.tree.map(
+
+    microbatch_config = MicrobatchConfig()
+    if microbatch_config.size is not None:
+      from legate.jax import microbatch
+
+      def microbatch_input_sharding(x):
+        if len(x.shape) == 2:
+          return P("replica", "seq")
+        return None
+
+      arg_shardings = jax.tree_map(microbatch_input_sharding, inputs)
+
+      g = microbatch(g, dim=0, argnum=2,
+                     size=microbatch_config.size, arg_shardings=arg_shardings,
+                     schedule=microbatch_config.schedule, num_stages=microbatch_config.num_stages,
+                     interleave=microbatch_config.interleave)
+    values, grads = g(with_grad, no_grad, inputs, prng_key)
+
+    grads = jax.tree_map(
         lambda eo, eg, m, g: jnp.zeros_like(m) if eg and not eo else g,
         excluded_for_opt,
         excluded_for_grad,
@@ -1605,19 +1640,19 @@ def initialize_partitioned_model_states(
       lambda p: jax.sharding.NamedSharding(global_mesh, p),
       prng_key_partition_spec,
   )
-  train_state_shardings = jax.tree.map(
-      lambda p: jax.sharding.NamedSharding(global_mesh, p),
-      train_state_partition_specs,
-  )
 
-  init_fn = pjit.pjit(
-      init_model_from_seed,
-      in_shardings=prng_key_shardings,
-      out_shardings=train_state_shardings,
-  )
+  train_state_shardings = train_state_partition_specs
+
+  config = PaxLegateConfig()
+  with legate.jax.context(configurable=config.configurable):
+    init_fn = pjit.pjit(
+        init_model_from_seed,
+        in_shardings=prng_key_shardings,
+        out_shardings=train_state_shardings,
+    )
   init_fn = bind_mesh(init_fn, global_mesh)
-
   partitioned_vars = init_fn(prng_key)
+
   train_state_provenance = train_states.build_train_state_provenance(
       partitioned_vars
   )
@@ -1651,7 +1686,9 @@ def shard_on_batch_dim_partition_spec(
   sharding = [-1] * x_dim
   # Assume the first dim is batch, and fully shard the batch dim over the entire
   # mesh.
-  sharding[0] = tuple(mesh_names)
+  sharding[0] = tuple([x for x in mesh_names if x != "seq"])
+  if x_dim > 1:
+    sharding[1] = "seq"
   return base_layer.to_partition_spec(sharding, mesh_names)
 
 

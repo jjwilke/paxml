@@ -105,13 +105,16 @@ def set_sharding_annotations_v1(
     dcn_mesh_shape: a 3D sequence representing the mesh across slices, or None.
   """
   model_p = task_p.model
+  # asserts.eq(len(ici_mesh_shape), 3)
   model_p.ici_mesh_shape = ici_mesh_shape
   if dcn_mesh_shape is not None:
+    # asserts.eq(len(dcn_mesh_shape), 3)
     model_p.dcn_mesh_shape = dcn_mesh_shape
   replica_axis = 'replica'
   data_axis = 'data'
   mdl_axis = 'mdl'
-  mesh_axis_names = [replica_axis, data_axis, mdl_axis]
+  seq_axis = 'seq'
+  mesh_axis_names = [replica_axis, data_axis, mdl_axis, seq_axis]
   task_p.train.inputs_split_mapping = NestedMap(
       map_1d=((replica_axis, data_axis),),
       map_2d=((replica_axis, data_axis), None))
@@ -125,6 +128,7 @@ def set_sharding_annotations_v1(
         replica_axis=replica_axis,
         data_axis=data_axis,
         mdl_axis=mdl_axis,
+        seq_axis=seq_axis,
         ici_mesh_shape=model_p.ici_mesh_shape,
         dcn_mesh_shape=model_p.dcn_mesh_shape,
         mesh_axis_names=mesh_axis_names,
@@ -583,6 +587,7 @@ class TransformerLmSpmdAdafactor(base_experiment.BaseExperiment):
   DECAY_END = 100000
   USE_FP8 = False
   USE_EXPERT_PARALLEL = False
+  REMAT = False
 
   # optimizer related
   DROPOUT_PROB = 0.0
@@ -671,6 +676,9 @@ class TransformerLmSpmdAdafactor(base_experiment.BaseExperiment):
     transformer_layer_p.tr_atten_tpl.use_bias = False
     transformer_layer_p.tr_atten_tpl.combine_qkv = self.COMBINE_QKV
 
+    stacked_transformer_tpl.checkpoint_policy = self.CHECKPOINT_POLICY
+    stacked_transformer_tpl.remat = self.REMAT
+
     if self.USE_FP8:
       transformer_layer_p.tr_atten_tpl.proj_tpl.einsum_tpl = pax_fiddle.Config(
           fp8_ops.Fp8EinsumOp
@@ -710,6 +718,7 @@ class TransformerLmSpmdAdafactor(base_experiment.BaseExperiment):
           self.CHECKPOINT_POLICY)
     else:
       model_p.lm_tpl.stacked_transformer_tpl = stacked_transformer_tpl
+      model_p.lm_tpl.stacked_transformer_tpl.checkpoint_policy = self.CHECKPOINT_POLICY
 
     # Enable bf16.
     model_p.fprop_dtype = self.FPROP_DTYPE
@@ -908,6 +917,7 @@ class TransformerLmSpmdPipelineAdafactor(TransformerLmSpmdAdafactor):
       stacked_transformer_tpl.x_times = self.NUM_LAYERS // (
           self.NUM_STAGES * self.CIRCULAR_REPEAT)
       stacked_transformer_tpl.checkpoint_policy = self.CHECKPOINT_POLICY
+      stacked_transformer_tpl.remat = self.REMAT
 
     # Wrap it with a pipeline layer.
     model_p.lm_tpl.stacked_transformer_tpl = pax_fiddle.Config(

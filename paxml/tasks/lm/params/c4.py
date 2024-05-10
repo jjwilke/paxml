@@ -244,20 +244,35 @@ def set_adam_and_learning_rate_schedule(
   """Sets the Adam optimizer and the learning rate schedule."""
   lp = task_p.train.learner
   lp.loss_name = 'total_loss'
-  lp.optimizer = pax_fiddle.Config(
-      optimizers.Adam,
-      beta1=cls.ADAM_BETA1 if cls.ADAM_BETA1 else 0.9,
-      beta2=cls.ADAM_BETA2 if cls.ADAM_BETA2 else 0.999,
-      weight_decay=cls.WEIGHT_DECAY if cls.WEIGHT_DECAY else 0.0,
-      epsilon=cls.ADAM_EPSILON if cls.ADAM_EPSILON else 1e-6,
-      epsilon_root=cls.ADAM_EPSILON_ROOT if cls.ADAM_EPSILON_ROOT else 0.0,
-      clip_gradient_norm_to_value=cls.CLIP_GRADIENT_NORM_TO_VALUE
-      if cls.CLIP_GRADIENT_NORM_TO_VALUE
-      else 5.0,
-      clip_threshold=cls.ADAM_CLIP_THRESHOLD
-      if cls.ADAM_CLIP_THRESHOLD
-      else 1.0,
-  )
+
+  if cls.USE_ADAFACTOR:
+    lp.optimizer = pax_fiddle.Config(
+        optimizers.ShardedAdafactor,
+        decay_method='adam',
+        beta1=cls.ADAM_BETA1,
+        decay_adam=0.99,
+        weight_decay=cls.WEIGHT_DECAY,
+        clip_gradient_norm_to_value=cls.CLIP_GRADIENT_NORM_TO_VALUE,
+    )
+  elif cls.USE_SGD:
+    lp.optimizer = pax_fiddle.Config(
+      optimizers.Sgd,
+    )
+  else:
+    lp.optimizer = pax_fiddle.Config(
+        optimizers.Adam,
+        beta1=cls.ADAM_BETA1 if cls.ADAM_BETA1 else 0.9,
+        beta2=cls.ADAM_BETA2 if cls.ADAM_BETA2 else 0.999,
+        weight_decay=cls.WEIGHT_DECAY if cls.WEIGHT_DECAY else 0.0,
+        epsilon=cls.ADAM_EPSILON if cls.ADAM_EPSILON else 1e-6,
+        epsilon_root=cls.ADAM_EPSILON_ROOT if cls.ADAM_EPSILON_ROOT else 0.0,
+        clip_gradient_norm_to_value=cls.CLIP_GRADIENT_NORM_TO_VALUE
+        if cls.CLIP_GRADIENT_NORM_TO_VALUE
+        else 5.0,
+        clip_threshold=cls.ADAM_CLIP_THRESHOLD
+        if cls.ADAM_CLIP_THRESHOLD
+        else 1.0,
+    )
 
   if hasattr(cls, 'PERCORE_BATCH_SIZE'):
     global_batch_size = int(cls.PERCORE_BATCH_SIZE * jax.device_count() + 1e-6)

@@ -339,6 +339,20 @@ class PaxStepNameFormat(ocp.step.NameFormat):
     step = step or get_step_from_checkpoint_asset(step_path)
     return ocp.step.Metadata(step=step, path=step_path)
 
+  def find_step(
+      self, base_path: epath.PathLike, step: int
+  ) -> ocp.step.Metadata:
+    """Returns metadata for the given step."""
+    step_path = ocp.step.build_step_path(base_path, self, step)
+    metadata = self.build_metadata(step_path, step=step)
+    if metadata is not None:
+      return metadata
+
+    raise ValueError(
+        f'No step path found with name={self.build_name(step)},'
+        f' NameFormat={self} for step={step} under {base_path}.'
+    )
+
   def find_metadata(
       self, base_path: epath.PathLike, step: int
   ) -> ocp.step.Metadata | None:

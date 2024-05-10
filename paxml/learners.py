@@ -130,9 +130,9 @@ class Learner(base_hyperparams.FiddleBaseParameterizable):
   loss_name: str | None = None
   stochastic_gradient: sgf.BaseStochasticGradient | None = None
   skip_zero_gradients: bool | None = None
-  grad_norm_summary: bool = True
+  grad_norm_summary: bool = False
   grad_norm_individual_vars: bool = False
-  var_norm_summary: bool = True
+  var_norm_summary: bool = False
   var_norm_individual_vars: bool = False
   check_valid_step: bool = True
   vectorize_on_repeat_prefix: bool = True

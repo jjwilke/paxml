@@ -110,6 +110,9 @@ class GPT126MBase(TransformerLmSpmdAdam):
   FPROP_DTYPE = jnp.bfloat16
   MAX_STEPS = 600000
 
+  USE_ADAFACTOR = False
+  USE_SGD = False
+
   MAX_SEQ_LEN = 2048
   VOCAB_SIZE = 50304
   PACKED_INPUT = False
@@ -182,6 +185,31 @@ class GPT126MBase(TransformerLmSpmdAdam):
 
     return task_p
 
+
+@experiment_registry.register
+class Pile126M(GPT126MBase, PileUnsupervisedDataset):
+
+  def task(self) -> pax_fiddle.Config[tasks_lib.SingleTask]:
+    task_p = super().task()
+    return task_p
+
+
+from paxml.tasks.lm.params.lm_cloud import SyntheticDataset
+@experiment_registry.register
+class Lambada126M(GPT126MBase, SyntheticDataset):
+
+  ICI_MESH_SHAPE = [8,1,1]
+  MAX_STEPS = 100
+  EVAL_INTERVAL_STEPS = 10
+
+  def task(self) -> pax_fiddle.Config[tasks_lib.SingleTask]:
+    task_p = super().task()
+    task_p.train.always_use_train_for_model_init=False
+    task_p.model.report_strict_acc=True
+    task_p.train.num_train_steps = self.MAX_STEPS
+    task_p.train.eval_interval_steps = self.EVAL_INTERVAL_STEPS
+    task_p.model.eval_task = 'lambada'
+    return task_p
 
 ## 32 node
 class GPT5BBase(GPT126MBase):
@@ -309,15 +337,6 @@ class Synthetic175B(GPT175BBase, SyntheticDataset):
     return task_p
 
 
-### configs with the Pile dataset
-@experiment_registry.register
-class Pile126M(GPT126MBase, PileUnsupervisedDataset):
-
-  def task(self) -> pax_fiddle.Config[tasks_lib.SingleTask]:
-    task_p = super().task()
-    return task_p
-
-
 @experiment_registry.register
 class Pile5B(GPT5BBase, PileUnsupervisedDataset):
 
@@ -331,19 +350,6 @@ class Pile175B(GPT175BBase, PileUnsupervisedDataset):
 
   def task(self) -> pax_fiddle.Config[tasks_lib.SingleTask]:
     task_p = super().task()
-    return task_p
-
-
-### example of a config that runs evaluation on the lambada dataset
-@experiment_registry.register
-class Lambada126M(GPT126MBase, LambadaDataset):
-
-  ICI_MESH_SHAPE = [8, 1, 1]
-
-  def task(self) -> pax_fiddle.Config[tasks_lib.SingleTask]:
-    task_p = super().task()
-    task_p.train.always_use_train_for_model_init = False
-    task_p.model.eval_task = 'lambada'
     return task_p
 
 

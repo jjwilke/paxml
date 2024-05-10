@@ -20,7 +20,7 @@ import dataclasses
 import functools
 import json
 import pprint
-from typing import Any, Protocol, Sequence
+from typing import Any, Optional, Protocol, Sequence
 
 from absl import logging
 from clu import platform
@@ -42,6 +42,7 @@ from praxis import pax_fiddle
 from praxis import py_utils
 from praxis import pytypes
 from praxis import trees
+import legate.jax
 
 # tf_data_service_lib is slow to import, so we do it lazily.
 tf_data_service_lib = lazy_loader.LazyLoader(
@@ -64,6 +65,7 @@ TrainStateProvenance = train_states.TrainStateProvenance
 TrainStateMetadata = trainer_lib.TrainStateMetadata
 RunningMode = trainer_lib.RunningMode
 
+import numpy as np
 
 def _identity(x):
   """A helper identity function, defined globally so it is JIT-compiled once."""
@@ -127,9 +129,24 @@ def compile_for_auto_sharding(
     return core.ShapedArray(x.shape, dtype)
 
   inputs_shape_dtype = jax.tree.map(_create_aval, inputs_shape_dtype)
-  compiled = step_fn.lower(
-      train_state, step_key, inputs_shape_dtype, static_args
-  ).compile()
+  with legate.jax.MeshWrapper.lower_mode():
+    lowered = step_fn.lower(
+        train_state, step_key, inputs_shape_dtype, static_args
+    )
+  with legate.jax.MeshWrapper.compile_mode():
+    compiled = lowered.compile()
+
+  sharding_str_arr = []
+  def check(inp, inp_sharding, out):
+    sharding_str_arr.append(f"{inp.shape} {inp.sharding} {out}")
+    if not inp_sharding.is_equivalent_to(out, len(inp.shape)):
+      raise Exception("\n".join(sharding_str_arr) + " mismatch")
+
+  # validate that the donated input parameters and their aliased outputs
+  # have the same shardings so that after updating the input the sharding
+  # is the same across iterations
+  jax.tree_map(check, train_state, compiled.input_shardings[0][0], compiled.output_shardings[0])
+
   return compiled, compiled.input_shardings[0]
 
 
@@ -740,6 +757,7 @@ class PmapPartitioner(Partitioner):
     ):
       if static_args:
         static_args = static_args.replace(unpadded_global_batch_size=None)
+      config = trainer_lib.PaxLegateConfig()
       return partitioned_step_fn(state, prng_key, inputs, static_args)
 
     return _wrapped_partitioned_step, None  # Input partition spec.
@@ -782,7 +800,10 @@ class PjitPartitioner(Partitioner):
     else:
       logging.info('Using provided mesh for PjitPartitioner')
     logging.info('device_mesh: %s', device_mesh)
-    self._global_mesh = jax.sharding.Mesh(device_mesh, model.mesh_axis_names)
+
+    config = trainer_lib.PaxLegateConfig()
+
+    self._global_mesh = legate.jax.MeshWrapper(jax.sharding.Mesh(device_mesh, model.mesh_axis_names), config.local_mesh)
 
     # Pjit'ed function to preprocess the prng key.
     self._broadcast_key_fn = None
@@ -894,9 +915,17 @@ class PjitPartitioner(Partitioner):
   ) -> NestedJTensor:
     """Preprocess the input batch before using it."""
     if self._reshard_inputs:
-      return input_pipeline.reshard_for_spmd(
-          padded_inputs, self.global_mesh, partition_specs
+      global_shapes = jax.tree_util.tree_map(
+          py_utils.get_global_input_shape_dtype, padded_inputs
       )
+
+      def _make_array(x, global_shape, sharding):
+        if isinstance(sharding, PartitionSpec):
+          sharding = jax.sharding.NamedSharding(self.global_mesh, sharding)
+        return py_utils.make_array(x, global_shape, self.global_mesh, pspecs=None, sharding=sharding)
+
+      return jax.tree_util.tree_map(_make_array, padded_inputs, global_shapes, partition_specs)
+
     return padded_inputs
 
   def get_train_state_metadata(
@@ -1009,7 +1038,8 @@ class PjitPartitioner(Partitioner):
       # need to keep this resharding, because the resharding is related to the
       # locations of the real data (inputs_split_mapping) and is not visible
       # from HLOs.
-      inputs = jax.tree.map(reshard_inputs_fn, inputs)
+      #inputs = jax.tree_map(reshard_inputs_fn, inputs)
+
 
       fn_out = step_fn(
           self._jax_task,
@@ -1043,18 +1073,14 @@ class PjitPartitioner(Partitioner):
     logging.info('step_fn fn_in_partition_specs=%s', fn_in_partition_specs)
     logging.info('step_fn fn_out_partition_specs=%s', fn_out_partition_specs)
 
-    fn_in_shardings = jax.tree.map(
-        lambda p: jax.sharding.NamedSharding(self._global_mesh, p)
-        if not isinstance(p, pjit.AUTO)
-        else p,
-        fn_in_partition_specs,
-    )
-    fn_out_shardings = jax.tree.map(
-        lambda p: jax.sharding.NamedSharding(self._global_mesh, p)
-        if not isinstance(p, pjit.AUTO)
-        else p,
-        fn_out_partition_specs,
-    )
+    def canonicalize_sharding(p):
+      if isinstance(p, pjit.AUTO) or isinstance(p, jax.sharding.NamedSharding) or isinstance(p, jax.sharding.GSPMDSharding):
+        return p
+      return jax.sharding.NamedSharding(self._global_mesh, p)
+
+    fn_in_shardings = jax.tree_map(canonicalize_sharding, fn_in_partition_specs)
+    fn_out_shardings = jax.tree_map(canonicalize_sharding, fn_out_partition_specs)
+
     extra_kwargs = dict(in_shardings=fn_in_shardings)
     if not use_pspec_on_array_inputs:
       extra_kwargs = {}
@@ -1172,7 +1198,15 @@ class PjitPartitioner(Partitioner):
         fn_out_partition_specs,
         use_pspec_on_array_inputs=use_pspec_on_array_inputs,
     )
-    return partitioned_step_fn
+    def _wrapped_partitioned_step(
+      state,
+      prng_key,
+      inputs,
+      static_args: BaseStepFnStaticArgs | None = None,
+    ):
+      return partitioned_step_fn(state, prng_key, inputs, static_args)
+
+    return _wrapped_partitioned_step
 
 
 class AutoShardingPjitPartitioner(PjitPartitioner):
@@ -1296,8 +1330,13 @@ class AutoShardingPjitPartitioner(PjitPartitioner):
         else pjit.AUTO(self.global_mesh)
     )
 
+    from jax.lax import with_sharding_constraint
+    def autoshard_step_fn(train_state, *args):
+      sharded_train_state = jax.tree_map(lambda x, y: with_sharding_constraint(x, y), train_state, metadata.partition_specs)
+      return step_fn(sharded_train_state, *args)
+
     partitioned_step_fn = self._pjit(
-        step_fn,
+        autoshard_step_fn,
         is_eval,
         fn_in_partition_specs,
         fn_out_partition_specs,
@@ -1314,18 +1353,24 @@ class AutoShardingPjitPartitioner(PjitPartitioner):
         jax.tree.map(jnp.shape, inputs_shape_dtype),
         static_args,
     )
-    (
-        auto_sharded_step_fn,
-        input_shardings,
-    ) = compile_for_auto_sharding(
-        partitioned_step_fn,
-        metadata.unpadded_global_shapes,
-        self._init_key,
-        inputs_shape_dtype,
-        static_args,
-    )
-    new_train_state_pspec = jax.tree.map(lambda x: x.spec, input_shardings[0])
-    new_input_pspec = jax.tree.map(lambda x: x.spec, input_shardings[2])
+
+    config = trainer_lib.PaxLegateConfig()
+    with legate.jax.context(configurable=config.configurable, autoshard=True):
+      (
+          auto_sharded_step_fn,
+          input_shardings,
+      ) = compile_for_auto_sharding(
+          partitioned_step_fn,
+          metadata.unpadded_global_shapes,
+          self._init_key,
+          inputs_shape_dtype,
+          static_args,
+      )
+
+
+
+    new_train_state_pspec = input_shardings[0]
+    new_input_pspec = input_shardings[2]
     return auto_sharded_step_fn, new_input_pspec, new_train_state_pspec
 
   def get_train_state_metadata(
@@ -1408,6 +1453,7 @@ class AutoShardingPjitPartitioner(PjitPartitioner):
               subset=self._auto_sharding_input_spec, superset=inputs
           )
       )
+
       return partitioned_step_fn(state, prng_key, subset_extracted_inputs)
 
     self._auto_sharding_result = (
@@ -1440,6 +1486,12 @@ class AutoShardingPjitPartitioner(PjitPartitioner):
     if not self._auto_sharding_result:
       self.get_train_state_metadata(discard_opt_states=is_eval)
     if step_fn is self._auto_sharding_info.step_fn:
+      return (
+          self._auto_sharding_result.partitioned_step_fn,
+          self._auto_sharding_result.input_partition_spec,
+      )
+      # this sanity check appears to be wrong and compares global sizes
+      # against per-node sizes
       if trees.is_subset(
           self._auto_sharding_result.inputs_shape_dtype, inputs_shape_dtype
       ):
