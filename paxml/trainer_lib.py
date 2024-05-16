@@ -99,6 +99,7 @@ import legate.jax
 @dataclasses.dataclass
 class PaxLegateConfig(legate.jax.ClientConfig):
   enable_tracing: bool = False
+  local_mesh: Optional[tuple[int]] = None
 
 class RunningMode(enum.Flag):
   """Running mode."""

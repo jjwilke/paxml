@@ -33,7 +33,7 @@ from praxis import schedules
 from praxis.layers import activations
 from praxis.layers import glam
 from praxis.layers import gpu_fast_attention
-from praxis.layers import grok
+#from praxis.layers import grok
 from praxis.layers import transformers
 
 WeightInit = base_layer.WeightInit
@@ -46,7 +46,7 @@ class NVIDIA1_3B(c4.TransformerLmSpmdAdam, lm_cloud.SyntheticDataset):
   USE_FLASH_ATTENTION = False
   USE_TRITON_LAYER_NORM = False
 
-  USE_REPEATED_LAYER = True
+  USE_REPEATED_LAYER = False
 
   DCN_MESH_SHAPE = [1, 1, 1]
   ICI_MESH_SHAPE = [16, 1, 1]
@@ -64,6 +64,7 @@ class NVIDIA1_3B(c4.TransformerLmSpmdAdam, lm_cloud.SyntheticDataset):
   ACTIVATION_CLS = layers.GELU
   USE_GATED_ACTIVATION = False
   PACKED_INPUT = True
+  MAX_STEPS = 10
 
   FPROP_DTYPE = jnp.bfloat16
 
@@ -82,6 +83,8 @@ class NVIDIA1_3B(c4.TransformerLmSpmdAdam, lm_cloud.SyntheticDataset):
   CLIP_GRADIENT_NORM_TO_VALUE = 1.0
   CLIP_THRESHOLD = 1.0
 
+  USE_SGD = False
+
   # Learning rate schedule
   LR_SCHEDULE = 'linear_rampup_cosine_decay'
   LR_COS_WARMUP = 0
@@ -98,6 +101,8 @@ class NVIDIA1_3B(c4.TransformerLmSpmdAdam, lm_cloud.SyntheticDataset):
     task_p.summary_verbosity = 0
     # (Practically) disable summary writes.
     task_p.train.save_interval_steps = 100000
+
+    task_p.train.num_train_steps = self.MAX_STEPS
 
     model_p = task_p.model
     model_p.params_init = WeightInit.Gaussian(self.INIT_STD)
@@ -122,6 +127,12 @@ class NVIDIA1_3B(c4.TransformerLmSpmdAdam, lm_cloud.SyntheticDataset):
       )
       fused_ln_tpl.copy_fields_from(layer_p.ln_tpl)
       layer_p.ln_tpl = fused_ln_tpl
+
+    model_p.lm_tpl.stacked_transformer_tpl.transformer_layer_params_tpl.tr_atten_tpl.atten_logit_cap = 0.
+    model_p.lm_tpl.stacked_transformer_tpl.transformer_layer_params_tpl.tr_atten_tpl.internal_enable_per_dim_scale = False
+    model_p.lm_tpl.stacked_transformer_tpl.transformer_layer_params_tpl.tr_fflayer_tpl.has_bias = False
+    model_p.lm_tpl.stacked_transformer_tpl.transformer_layer_params_tpl
+    model_p.lm_tpl.packed_input = False
 
     scale = self.SOFTMAX_INIT_STD
     if not scale:

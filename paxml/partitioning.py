@@ -65,6 +65,112 @@ TrainStateProvenance = train_states.TrainStateProvenance
 TrainStateMetadata = trainer_lib.TrainStateMetadata
 RunningMode = trainer_lib.RunningMode
 
+import contextlib
+from jax._src.mesh import thread_resources
+from jax._src import config as jax_config
+import enum
+from collections import OrderedDict
+import numpy as np
+
+class LegateMeshWrapper(contextlib.ContextDecorator):
+
+  class Mode(enum.IntEnum):
+    LOWERING = 0
+    COMPILING = 1
+    NONE = 2
+  _mode = Mode.NONE
+    
+  def __init__(self, global_mesh, local_mesh: tuple[int]):
+    self.global_mesh = global_mesh
+    self.local_shape = OrderedDict( (name, dim) for name, dim in self.global_mesh.shape.items() )
+    for local_dim, (name, global_dim) in zip(local_mesh, self.global_mesh.shape.items()):
+      if local_dim != global_dim:
+        self.local_shape[name] = local_dim
+
+    self.num_local_devices = np.prod(local_mesh)
+
+    local_devices_slice = tuple( slice(0,dim) for dim in local_mesh )
+    self._local_devices = self.global_mesh.devices[local_devices_slice]
+
+
+  @classmethod
+  @contextlib.contextmanager
+  def mode(cls, mode: Mode):
+    save = cls._mode
+    cls._mode = mode
+    yield
+    cls._mode = save
+
+  def __repr__(self):
+    return f"LegateMeshWrapper({repr(self.global_mesh)})"
+
+  def __str__(self):
+    return f"LegateMeshWrapper({str(self.global_mesh)})"
+
+  @property
+  def is_multi_process(self):
+    return self.global_mesh.is_multi_process
+
+  @property
+  def _flat_devices_tuple(self):
+    devices = self.global_mesh._flat_devices_tuple
+    if self.compiling():
+      return devices[:self.num_local_devices]
+    return devices
+  
+  @property
+  def local_devices(self):
+    return self.global_mesh.local_devices
+
+  def compiling(self) -> bool:
+    return LegateMeshWrapper._mode == self.Mode.COMPILING
+
+  @property
+  def axis_names(self):
+    return self.global_mesh.axis_names
+
+  @property
+  def devices(self):
+    if self.compiling():
+      return self._local_devices
+    return self.global_mesh.devices
+  
+  @property
+  def shape(self):
+    if self.compiling():
+      return self.local_shape
+    return self.global_mesh.shape
+
+  @property
+  def _internal_device_list(self):
+    return self.global_mesh._internal_device_list
+  
+  @property
+  def size(self):
+    if self.compiling():
+      return self.num_local_devices
+    return self.global_mesh.size
+  
+  @property
+  def empty(self):
+    return self.global_mesh.empty
+  
+  def __enter__(self):
+    new_env = thread_resources.stack[-1].with_mesh(self)
+    thread_resources.stack.append(new_env)
+    thread_resources.env = new_env
+    jax_config.update_thread_local_jit_state(
+        mesh_context_manager=tuple(t.physical_mesh for t in thread_resources.stack
+                                  if not t.physical_mesh.empty))
+    return self
+
+  def __exit__(self, exc_type, exc_value, traceback):
+    thread_resources.stack.pop()
+    thread_resources.env = thread_resources.stack[-1]
+    jax_config.update_thread_local_jit_state(
+        mesh_context_manager=tuple(t.physical_mesh for t in thread_resources.stack
+                                  if not t.physical_mesh.empty))
+    return False
 
 def _identity(x):
   """A helper identity function, defined globally so it is JIT-compiled once."""
@@ -128,9 +234,12 @@ def compile_for_auto_sharding(
     return core.ShapedArray(x.shape, dtype)
 
   inputs_shape_dtype = jax.tree.map(_create_aval, inputs_shape_dtype)
-  compiled = step_fn.lower(
-      train_state, step_key, inputs_shape_dtype, static_args
-  ).compile()
+  with LegateMeshWrapper.mode(LegateMeshWrapper.Mode.LOWERING):
+    lowered = step_fn.lower(
+        train_state, step_key, inputs_shape_dtype, static_args
+    )
+  with LegateMeshWrapper.mode(LegateMeshWrapper.Mode.COMPILING):
+    compiled = lowered.compile()
 
   sharding_str_arr = []
   def check(inp, inp_sharding, out):
@@ -798,7 +907,9 @@ class PjitPartitioner(Partitioner):
     else:
       logging.info('Using provided mesh for PjitPartitioner')
     logging.info('device_mesh: %s', device_mesh)
-    self._global_mesh = jax.sharding.Mesh(device_mesh, model.mesh_axis_names)
+
+    config = trainer_lib.PaxLegateConfig()
+    self._global_mesh = LegateMeshWrapper(jax.sharding.Mesh(device_mesh, model.mesh_axis_names), config.local_mesh)
 
     # Pjit'ed function to preprocess the prng key.
     self._broadcast_key_fn = None
@@ -1364,12 +1475,14 @@ class AutoShardingPjitPartitioner(PjitPartitioner):
           static_args,
       )
 
+
+
     new_train_state_pspec = input_shardings[0]
     new_input_pspec = input_shardings[2]
     return auto_sharded_step_fn, new_input_pspec, new_train_state_pspec
 
   def get_train_state_metadata(
-      self,
+      self, 
       discard_opt_states: bool = False,
       unpadded_global_batch_size: int | None = None,
   ) -> TrainStateMetadata:
