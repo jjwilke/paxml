@@ -938,6 +938,9 @@ import gin
 class MicrobatchConfig:
   size: Optional[int] = None
   batch_reshape: Optional[int] = None
+  schedule: Optional[str] = None
+  num_stages: Optional[int] = None
+  interleave: Optional[int] = None
 
 def _get_default_grad_fn(
     excluded_for_grad: NestedMap, excluded_for_opt: NestedMap
@@ -993,7 +996,9 @@ def _get_default_grad_fn(
       slice_shardings = jax.tree_map(microbatch_slice_sharding, inputs)
 
       g = microbatch(g, dim=0, argnum=2, batch_reshape=microbatch_config.batch_reshape, 
-                     size=microbatch_config.size, arg_shardings=arg_shardings, microbatch_shardings=slice_shardings)
+                     size=microbatch_config.size, arg_shardings=arg_shardings, microbatch_shardings=slice_shardings,
+                     schedule=microbatch_config.schedule, num_stages=microbatch_config.num_stages,
+                     interleave=microbatch_config.interleave)
     values, grads = g(with_grad, no_grad, inputs, prng_key)
 
     grads = jax.tree_map(
