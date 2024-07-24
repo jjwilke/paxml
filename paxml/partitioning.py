@@ -20,7 +20,7 @@ import dataclasses
 import functools
 import json
 import pprint
-from typing import Any, Protocol, Sequence
+from typing import Any, Optional, Protocol, Sequence
 
 from absl import logging
 from clu import platform
@@ -909,6 +909,7 @@ class PjitPartitioner(Partitioner):
     logging.info('device_mesh: %s', device_mesh)
 
     config = trainer_lib.PaxLegateConfig()
+
     self._global_mesh = LegateMeshWrapper(jax.sharding.Mesh(device_mesh, model.mesh_axis_names), config.local_mesh)
 
     # Pjit'ed function to preprocess the prng key.

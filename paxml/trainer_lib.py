@@ -937,7 +937,6 @@ import gin
 @dataclasses.dataclass
 class MicrobatchConfig:
   size: Optional[int] = None
-  batch_reshape: Optional[int] = None
   schedule: Optional[str] = None
   num_stages: Optional[int] = None
   interleave: Optional[int] = None
@@ -988,15 +987,11 @@ def _get_default_grad_fn(
         if len(x.shape) == 2:
           return P("replica", "seq")
         return None
-      def microbatch_slice_sharding(x):
-        if len(x.shape) == 2:
-          return None
-        return P()
-      arg_shardings = jax.tree_map(microbatch_input_sharding, inputs)
-      slice_shardings = jax.tree_map(microbatch_slice_sharding, inputs)
 
-      g = microbatch(g, dim=0, argnum=2, batch_reshape=microbatch_config.batch_reshape, 
-                     size=microbatch_config.size, arg_shardings=arg_shardings, microbatch_shardings=slice_shardings,
+      arg_shardings = jax.tree_map(microbatch_input_sharding, inputs)
+
+      g = microbatch(g, dim=0, argnum=2,
+                     size=microbatch_config.size, arg_shardings=arg_shardings,
                      schedule=microbatch_config.schedule, num_stages=microbatch_config.num_stages,
                      interleave=microbatch_config.interleave)
     values, grads = g(with_grad, no_grad, inputs, prng_key)
