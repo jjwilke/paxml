@@ -1645,14 +1645,14 @@ def initialize_partitioned_model_states(
   train_state_shardings = train_state_partition_specs
 
   config = PaxLegateConfig()
-  with legate.jax.context(config):
+  with legate.jax.context(configurable=config.configurable, enable_tracing=False):
     init_fn = pjit.pjit(
         init_model_from_seed,
         in_shardings=prng_key_shardings,
         out_shardings=train_state_shardings,
     )
-    init_fn = bind_mesh(init_fn, global_mesh)
-    partitioned_vars = init_fn(prng_key)
+  init_fn = bind_mesh(init_fn, global_mesh)
+  partitioned_vars = init_fn(prng_key)
 
   train_state_provenance = train_states.build_train_state_provenance(
       partitioned_vars

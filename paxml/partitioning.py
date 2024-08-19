@@ -247,6 +247,9 @@ def compile_for_auto_sharding(
     if not inp_sharding.is_equivalent_to(out, len(inp.shape)):
       raise Exception("\n".join(sharding_str_arr) + " mismatch")
 
+  # validate that the donated input parameters and their aliased outputs
+  # have the same shardings so that after updating the input the sharding
+  # is the same across iterations
   jax.tree_map(check, train_state, compiled.input_shardings[0][0], compiled.output_shardings[0])
 
   import os
@@ -1464,7 +1467,7 @@ class AutoShardingPjitPartitioner(PjitPartitioner):
     )
 
     config = trainer_lib.PaxLegateConfig()
-    with legate.jax.context(config):
+    with legate.jax.context(configurable=config.configurable, autoshard=True):
       (
           auto_sharded_step_fn,
           input_shardings,
